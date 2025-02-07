@@ -1,6 +1,7 @@
 import streamlit as st
 import time
 import warnings
+import os
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -25,18 +26,30 @@ model = ChatGoogleGenerativeAI(
     google_api_key=GOOGLE_API_KEY
 )
 
-# Function to Stream Text Output
-def stream_data(response):
-    for word in response.split(" "):
-        yield word + " "
-        time.sleep(0.02)
+# Define ChromaDB directory
+CHROMA_DB_DIR = "./chroma_db"
+
+# Function to clear previous ChromaDB content
+def clear_chroma_content():
+    """Deletes the existing collection from ChromaDB without removing the folder."""
+    if os.path.exists(CHROMA_DB_DIR):
+        try:
+            vector_store = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=GoogleGenerativeAIEmbeddings(
+                model="models/embedding-001", google_api_key=GOOGLE_API_KEY))
+            vector_store.delete_collection()  # Deletes all stored vectors
+            del vector_store
+        except Exception as e:
+            st.warning(f"Could not clear ChromaDB content: {e}")
 
 # Upload PDF File
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file:
     st.success("PDF uploaded successfully! Processing...")
-    
+
+    # Clear ChromaDB before processing a new PDF
+    clear_chroma_content()
+
     # Save Uploaded File Temporarily
     pdf_path = f"./uploaded_{uploaded_file.name}"
     with open(pdf_path, "wb") as f:
@@ -45,7 +58,7 @@ if uploaded_file:
     # Load and Process PDF
     pdf_loader = PyPDFLoader(pdf_path)
     pages = pdf_loader.load_and_split()
-    
+
     # Text Splitting
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)
     context = "\n\n".join(str(p.page_content) for p in pages)
@@ -57,12 +70,16 @@ if uploaded_file:
         google_api_key=GOOGLE_API_KEY
     )
 
-    # Create a New Chroma Vector Store for Each PDF
-    vector_store = Chroma.from_texts(texts, embeddings, persist_directory="./chroma_db")
+    # Create a New Chroma Vector Store (Fresh instance)
+    vector_store = Chroma.from_texts(texts, embeddings, persist_directory=CHROMA_DB_DIR)
     vector_store.persist()
 
+    # Ensure vector store is closed before next upload
+    vector_store._collection = None  # Release internal resources
+    del vector_store  
+
     # Create Retriever
-    vector_index = vector_store.as_retriever(search_kwargs={"k": 5})
+    vector_index = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings).as_retriever(search_kwargs={"k": 5})
 
     # Create Retrieval-QA Chain
     qa_chain = RetrievalQA.from_chain_type(
@@ -73,7 +90,7 @@ if uploaded_file:
 
     # User Query
     user_input = st.text_input("Ask a question about the uploaded PDF:")
-    
+
     # Function to clean the output
     def clean_response(response):
         response = response.replace("<sup>", "^").replace("</sup>", "")
@@ -83,7 +100,6 @@ if uploaded_file:
     if user_input:
         with st.spinner("Processing..."):
             response_placeholder = st.empty()
-            streamed_text = ""
 
             # Query the model
             result = qa_chain({"query": user_input})
