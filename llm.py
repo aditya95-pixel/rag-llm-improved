@@ -28,7 +28,6 @@ model = ChatGoogleGenerativeAI(
 CHROMA_DB_DIR = "./chroma_db"
 
 def clear_chroma_content():
-    """Deletes the existing collection from ChromaDB without removing the folder."""
     if os.path.exists(CHROMA_DB_DIR):
         try:
             vector_store = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=GoogleGenerativeAIEmbeddings(
