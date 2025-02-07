@@ -8,17 +8,16 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.vectorstores import Chroma
 from langchain.chains.retrieval_qa.base import RetrievalQA
 from decouple import config
-
-# Suppress warnings
+def stream_data(response):
+    for word in response.split(" "):
+        yield word + " "
+        time.sleep(0.02)
 warnings.filterwarnings("ignore")
 
-# Streamlit App Title
 st.title("Chatbot with RAG - PDF Question Answering")
 
-# Google API Key
 GOOGLE_API_KEY = config("GOOGLE_API_KEY")
 
-# Initialize LLM Model
 model = ChatGoogleGenerativeAI(
     model="gemini-1.5-flash",
     temperature=0.2,
@@ -26,72 +25,58 @@ model = ChatGoogleGenerativeAI(
     google_api_key=GOOGLE_API_KEY
 )
 
-# Define ChromaDB directory
 CHROMA_DB_DIR = "./chroma_db"
 
-# Function to clear previous ChromaDB content
 def clear_chroma_content():
     """Deletes the existing collection from ChromaDB without removing the folder."""
     if os.path.exists(CHROMA_DB_DIR):
         try:
             vector_store = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=GoogleGenerativeAIEmbeddings(
                 model="models/embedding-001", google_api_key=GOOGLE_API_KEY))
-            vector_store.delete_collection()  # Deletes all stored vectors
+            vector_store.delete_collection() 
             del vector_store
         except Exception as e:
             st.warning(f"Could not clear ChromaDB content: {e}")
 
-# Upload PDF File
 uploaded_file = st.file_uploader("Upload a PDF file", type=["pdf"])
 
 if uploaded_file:
     st.success("PDF uploaded successfully! Processing...")
 
-    # Clear ChromaDB before processing a new PDF
     clear_chroma_content()
 
-    # Save Uploaded File Temporarily
     pdf_path = f"./uploaded_{uploaded_file.name}"
     with open(pdf_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
 
-    # Load and Process PDF
     pdf_loader = PyPDFLoader(pdf_path)
     pages = pdf_loader.load_and_split()
 
-    # Text Splitting
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)
     context = "\n\n".join(str(p.page_content) for p in pages)
     texts = text_splitter.split_text(context)
 
-    # Embeddings Model
     embeddings = GoogleGenerativeAIEmbeddings(
         model="models/embedding-001",
         google_api_key=GOOGLE_API_KEY
     )
 
-    # Create a New Chroma Vector Store (Fresh instance)
     vector_store = Chroma.from_texts(texts, embeddings, persist_directory=CHROMA_DB_DIR)
     vector_store.persist()
 
-    # Ensure vector store is closed before next upload
-    vector_store._collection = None  # Release internal resources
+    vector_store._collection = None 
     del vector_store  
 
-    # Create Retriever
     vector_index = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings).as_retriever(search_kwargs={"k": 5})
 
-    # Create Retrieval-QA Chain
     qa_chain = RetrievalQA.from_chain_type(
         model,
         retriever=vector_index,
         return_source_documents=True
     )
 
-    # User Query
     user_input = st.text_input("Ask a question about the uploaded PDF:")
 
-    # Function to clean the output
     def clean_response(response):
         response = response.replace("<sup>", "^").replace("</sup>", "")
         response = response.replace("<sub>", "~").replace("</sub>", "")
@@ -101,9 +86,10 @@ if uploaded_file:
         with st.spinner("Processing..."):
             response_placeholder = st.empty()
 
-            # Query the model
             result = qa_chain({"query": user_input})
 
-            # Clean and display response
             cleaned_response = clean_response(result["result"])
-            response_placeholder.markdown(cleaned_response, unsafe_allow_html=True)
+            streamed_text = "" 
+            for word in stream_data(result["result"]):
+                streamed_text += word
+                response_placeholder.markdown(streamed_text)
