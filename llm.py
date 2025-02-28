@@ -2,6 +2,8 @@ import streamlit as st
 import time
 import warnings
 import os
+import requests
+from bs4 import BeautifulSoup
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -17,7 +19,7 @@ def stream_data(response):
 
 warnings.filterwarnings("ignore")
 
-st.title("Chatbot with RAG - Document Question Answering")
+st.title("Chatbot with RAG - Document & Web Scraper")
 
 GOOGLE_API_KEY = config("GOOGLE_API_KEY")
 
@@ -40,31 +42,61 @@ def clear_chroma_content():
         except Exception as e:
             st.warning(f"Could not clear ChromaDB content: {e}")
 
-uploaded_file = st.file_uploader("Upload a PDF, Word, or TXT file", type=["pdf", "docx", "txt"])
+def scrape_website(url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.google.com/"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
 
-if uploaded_file:
-    st.success("File uploaded successfully! Processing...")
+        paragraphs = [p.get_text() for p in soup.find_all("p")]
+        content = "\n\n".join(paragraphs)
+
+        return content if content else None
+    except Exception as e:
+        st.error(f"Failed to scrape website: {e}")
+        return None
+
+uploaded_file = st.file_uploader("Upload a PDF, Word, or TXT file", type=["pdf", "docx", "txt"])
+url_input = st.text_input("Or enter a URL to scrape:")
+
+
+
+if uploaded_file or url_input:
+    st.success("Processing data...")
 
     clear_chroma_content()
 
-    file_path = f"./uploaded_{uploaded_file.name}"
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
+    if uploaded_file:
+        file_path = f"./uploaded_{uploaded_file.name}"
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
 
-    if uploaded_file.type == "application/pdf":
-        loader = PyPDFLoader(file_path)
-    elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-        loader = Docx2txtLoader(file_path)
-    elif uploaded_file.type == "text/plain":
-        loader = TextLoader(file_path)
-    else:
-        st.error("Unsupported file type.")
-        st.stop()
-    
-    pages = loader.load_and_split()
+        if uploaded_file.type == "application/pdf":
+            loader = PyPDFLoader(file_path)
+        elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            loader = Docx2txtLoader(file_path)
+        elif uploaded_file.type == "text/plain":
+            loader = TextLoader(file_path)
+        else:
+            st.error("Unsupported file type.")
+            st.stop()
+
+        pages = loader.load_and_split()
+        context = "\n\n".join(str(p.page_content) for p in pages)
+    elif url_input:
+        context = scrape_website(url_input)
+        if not context:
+            st.stop()
+
+    # Process text for ChromaDB
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)
-    context = "\n\n".join(str(p.page_content) for p in pages)
     texts = text_splitter.split_text(context)
+
     embeddings = GoogleGenerativeAIEmbeddings(
         model="models/embedding-001",
         google_api_key=GOOGLE_API_KEY
@@ -82,15 +114,16 @@ if uploaded_file:
         retriever=vector_index,
         return_source_documents=True
     )
+
     def clean_response(response):
         response = response.replace("<sup>", "^").replace("</sup>", "")
         response = response.replace("<sub>", "~").replace("</sub>", "")
         return response
-    
+
     def suggest_queries(text):
         rake = Rake()
         rake.extract_keywords_from_text(text)
-        return rake.get_ranked_phrases()[:5] 
+        return rake.get_ranked_phrases()[:5]
 
     query_suggestions = suggest_queries(context)
 
@@ -99,7 +132,6 @@ if uploaded_file:
     for qs in query_suggestions:
         if st.sidebar.button(qs):  
             clicked_query = qs  
-
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
@@ -122,4 +154,3 @@ if uploaded_file:
     for query, response in reversed(st.session_state.chat_history):
         with st.sidebar.expander(query):
             st.markdown(response)
-
