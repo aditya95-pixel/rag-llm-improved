@@ -100,6 +100,9 @@ if uploaded_file:
         if st.sidebar.button(qs):  
             clicked_query = qs  
 
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
     user_input = st.text_input("Ask a question about the document:", value=clicked_query if clicked_query else "")
 
     if user_input:
@@ -107,7 +110,16 @@ if uploaded_file:
             response_placeholder = st.empty()
             result = qa_chain({"query": user_input})
             cleaned_response = clean_response(result["result"])
+            
+            st.session_state.chat_history.append((user_input, cleaned_response))
+
             streamed_text = ""
             for word in stream_data(cleaned_response):
                 streamed_text += word
                 response_placeholder.markdown(streamed_text)
+
+    st.sidebar.markdown("### 💬 Chat History")
+    for query, response in reversed(st.session_state.chat_history):
+        with st.sidebar.expander(query):
+            st.markdown(response)
+
