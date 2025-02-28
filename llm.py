@@ -7,6 +7,7 @@ from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, Te
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain.chains.retrieval_qa.base import RetrievalQA
+from rake_nltk import Rake
 from decouple import config
 
 def stream_data(response):
@@ -81,13 +82,25 @@ if uploaded_file:
         retriever=vector_index,
         return_source_documents=True
     )
-
-    user_input = st.text_input("Ask a question about the uploaded document:")
-
     def clean_response(response):
         response = response.replace("<sup>", "^").replace("</sup>", "")
         response = response.replace("<sub>", "~").replace("</sub>", "")
         return response
+    
+    def suggest_queries(text):
+        rake = Rake()
+        rake.extract_keywords_from_text(text)
+        return rake.get_ranked_phrases()[:5] 
+
+    query_suggestions = suggest_queries(context)
+
+    st.sidebar.markdown("### 🔍 Suggested Queries")
+    clicked_query = None
+    for qs in query_suggestions:
+        if st.sidebar.button(qs):  
+            clicked_query = qs  
+
+    user_input = st.text_input("Ask a question about the document:", value=clicked_query if clicked_query else "")
 
     if user_input:
         with st.spinner("Processing..."):
@@ -95,6 +108,6 @@ if uploaded_file:
             result = qa_chain({"query": user_input})
             cleaned_response = clean_response(result["result"])
             streamed_text = ""
-            for word in stream_data(result["result"]):
+            for word in stream_data(cleaned_response):
                 streamed_text += word
                 response_placeholder.markdown(streamed_text)
