@@ -4,7 +4,9 @@ import warnings
 import os
 import requests
 import speech_recognition as sr
+import pytesseract
 from gtts import gTTS
+from PIL import Image
 from bs4 import BeautifulSoup
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
@@ -21,7 +23,7 @@ def stream_data(response):
 
 warnings.filterwarnings("ignore")
 
-st.title("🗣 Chatbot with RAG - Voice, Document & Web Scraper")
+st.title("🗣 Chatbot with RAG - Voice, Document, Web & Image Processing")
 
 GOOGLE_API_KEY = config("GOOGLE_API_KEY")
 
@@ -45,16 +47,11 @@ def clear_chroma_content():
             st.warning(f"Could not clear ChromaDB content: {e}")
 
 def scrape_website(url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/"
-    }
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
     try:
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-
         paragraphs = [p.get_text() for p in soup.find_all("p")]
         content = "\n\n".join(paragraphs)
         return content if content else None
@@ -62,7 +59,7 @@ def scrape_website(url):
         st.error(f"Failed to scrape website: {e}")
         return None
 
-uploaded_file = st.file_uploader("Upload a PDF, Word, or TXT file", type=["pdf", "docx", "txt"])
+uploaded_file = st.file_uploader("Upload a PDF, Word, TXT, or Image", type=["pdf", "docx", "txt", "jpg", "jpeg", "png"])
 url_input = st.text_input("Or enter a URL to scrape:")
 
 if uploaded_file or url_input:
@@ -80,12 +77,19 @@ if uploaded_file or url_input:
             loader = Docx2txtLoader(file_path)
         elif uploaded_file.type == "text/plain":
             loader = TextLoader(file_path)
+        elif uploaded_file.type in ["image/jpeg", "image/png"]:
+            image = Image.open(file_path)
+            context = pytesseract.image_to_string(image)
+            if not context.strip():
+                st.error("No text found in the image. Try a clearer image.")
+                st.stop()
         else:
             st.error("Unsupported file type.")
             st.stop()
 
-        pages = loader.load_and_split()
-        context = "\n\n".join(str(p.page_content) for p in pages)
+        if uploaded_file.type in ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain"]:
+            pages = loader.load_and_split()
+            context = "\n\n".join(str(p.page_content) for p in pages)
     elif url_input:
         context = scrape_website(url_input)
         if not context:
@@ -113,9 +117,7 @@ if uploaded_file or url_input:
     )
 
     def clean_response(response):
-        response = response.replace("<sup>", "^").replace("</sup>", "")
-        response = response.replace("<sub>", "~").replace("</sub>", "")
-        return response
+        return response.replace("<sup>", "^").replace("</sup>", "").replace("<sub>", "~").replace("</sub>", "")
 
     def suggest_queries(text):
         rake = Rake()
@@ -142,20 +144,13 @@ if uploaded_file or url_input:
             recognizer.adjust_for_ambient_noise(source)
             audio = recognizer.listen(source)
         try:
-            text = recognizer.recognize_google(audio)
-            st.success(f"🗣 You said: {text}")
-            return text
-        except sr.UnknownValueError:
-            st.error("🤷 Could not understand the audio. Please try again.")
+            return recognizer.recognize_google(audio)
+        except:
             return None
-        except sr.RequestError:
-            st.error("⚠ Speech Recognition service is unavailable. Check your internet connection.")
-            return None
-
     def text_to_speech(response_text):
-        tts = gTTS(text=response_text, lang="en")
-        tts.save("response.mp3")
-        st.audio("response.mp3", format="audio/mp3")
+            tts = gTTS(text=response_text, lang="en")
+            tts.save("response.mp3")
+            st.audio("response.mp3", format="audio/mp3")
 
     if st.button("🎙 Speak"):
         user_voice_input = recognize_speech()
@@ -163,18 +158,18 @@ if uploaded_file or url_input:
             user_input = user_voice_input
 
     if user_input:
-        with st.spinner("Processing..."):
-            response_placeholder = st.empty()
-            result = qa_chain({"query": user_input})
-            cleaned_response = clean_response(result["result"])
-            st.session_state.chat_history.append((user_input, cleaned_response))
+            with st.spinner("Processing..."):
+                response_placeholder = st.empty()
+                result = qa_chain({"query": user_input})
+                cleaned_response = clean_response(result["result"])
+                st.session_state.chat_history.append((user_input, cleaned_response))
 
-            streamed_text = ""
-            for word in stream_data(cleaned_response):
-                streamed_text += word
-                response_placeholder.markdown(streamed_text)
+                streamed_text = ""
+                for word in stream_data(cleaned_response):
+                    streamed_text += word
+                    response_placeholder.markdown(streamed_text)
 
-            text_to_speech(cleaned_response)
+                text_to_speech(cleaned_response)
 
     st.sidebar.markdown("### 💬 Chat History")
     for query, response in reversed(st.session_state.chat_history):
