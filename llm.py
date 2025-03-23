@@ -28,7 +28,7 @@ st.title("🗣 Chatbot with RAG - Voice, Document, Web & Image Processing")
 GOOGLE_API_KEY = config("GOOGLE_API_KEY")
 
 model = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
+    model="gemini-2.0-flash",
     temperature=0.2,
     convert_system_message_to_human=True,
     google_api_key=GOOGLE_API_KEY
@@ -147,6 +147,7 @@ if uploaded_file or url_input:
             return recognizer.recognize_google(audio)
         except:
             return None
+
     def text_to_speech(response_text):
             tts = gTTS(text=response_text, lang="en")
             tts.save("response.mp3")
